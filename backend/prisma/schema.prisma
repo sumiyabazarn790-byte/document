@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          Int              @id @default(autoincrement())
+  email       String           @unique
+  name        String
+  picture     String?
+  color       String?
+  createdAt   DateTime         @default(now())
+  lastLoginAt DateTime         @default(now())
+  documents   Document[]
+  memberships DocumentMember[]
+  sentInvites DocumentInvite[] @relation("InviteSender")
+  folders     Folder[]
+
+  @@map("users")
+}
+
+model Document {
+  id        Int               @id @default(autoincrement())
+  title     String
+  content   String?
+  ownerId   Int
+  folderId  Int?
+  owner     User              @relation(fields: [ownerId], references: [id])
+  folder    Folder?           @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  members   DocumentMember[]
+  invites   DocumentInvite[]
+  versions  DocumentVersion[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+}
+
+model Folder {
+  id        Int        @id @default(autoincrement())
+  name      String
+  ownerId   Int
+  owner     User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  documents Document[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([ownerId, name])
+}
+
+model DocumentMember {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  documentId Int
+  role       String
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id])
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, documentId])
+}
+
+model DocumentInvite {
+  id            Int       @id @default(autoincrement())
+  email         String
+  role          String
+  token         String    @unique
+  status        String    @default("pending")
+  documentId    Int
+  invitedById   Int
+  acceptedById  Int?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  acceptedAt    DateTime?
+
+  document      Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  invitedBy     User      @relation("InviteSender", fields: [invitedById], references: [id])
+
+  @@unique([documentId, email])
+}
+
+model DocumentVersion {
+  id         Int      @id @default(autoincrement())
+  documentId Int
+  title      String
+  content    String?
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}
