@@ -10,9 +10,6 @@ function ClearAllModal({ onClose, onConfirm }) {
           <h2>{t('clear_all_title')}</h2>
           <p>{t('clear_all_desc')}</p>
         </div>
-        <div className="clear-all-note">
-          {t('clear_all_note')}
-        </div>
         <div className="modal-actions">
           <button type="button" className="ghost auth-secondary" onClick={onClose}>
             {t('cancel')}

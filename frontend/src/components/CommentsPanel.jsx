@@ -25,7 +25,12 @@ function CommentsPanel({
 }) {
   const { t } = useI18n();
   const [openMenuId, setOpenMenuId] = useState(null);
+  const [showAllComments, setShowAllComments] = useState(false);
   const menuRef = useRef(null);
+
+  useEffect(() => {
+    setShowAllComments(false);
+  }, [commentTab, commentQuery, commentTypeFilter, commentTabFilter]);
 
   useEffect(() => {
     if (!openMenuId) return undefined;
@@ -39,6 +44,9 @@ function CommentsPanel({
     document.addEventListener('mousedown', handleOutsideClick);
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [openMenuId]);
+
+  const visibleComments = showAllComments ? comments : comments.slice(0, 3);
+  const hasMoreComments = comments.length > 3;
 
   return (
     <aside className="comments-panel">
@@ -61,18 +69,20 @@ function CommentsPanel({
         </div>
       </div>
       <div className="comments-tabs">
-        <button
-          className={`tab-button ${commentTab === 'all' ? 'active' : ''}`}
-          onClick={() => onChangeTab('all')}
-        >
-          {t('all_comments')}
-        </button>
-        <button
-          className={`tab-button ${commentTab === 'forYou' ? 'active' : ''}`}
-          onClick={() => onChangeTab('forYou')}
-        >
-          {t('for_you')}
-        </button>
+        <div className="comments-tab-row">
+          <button
+            className={`tab-button ${commentTab === 'all' ? 'active' : ''}`}
+            onClick={() => onChangeTab('all')}
+          >
+            {t('all_comments')}
+          </button>
+          <button
+            className={`tab-button ${commentTab === 'forYou' ? 'active' : ''}`}
+            onClick={() => onChangeTab('forYou')}
+          >
+            {t('for_you')}
+          </button>
+        </div>
         <div className="comments-search">
           <input
             value={commentQuery}
@@ -122,7 +132,7 @@ function CommentsPanel({
         {comments.length === 0 && (
           <p className="sidebar-hint">{t('no_comments')}</p>
         )}
-        {comments.map((comment) => {
+        {visibleComments.map((comment) => {
           const normalizedCurrentEmail = String(currentUser?.email || '').trim().toLowerCase();
           const normalizedAuthorEmail = String(comment.authorEmail || '').trim().toLowerCase();
           const canDelete =
@@ -188,6 +198,28 @@ function CommentsPanel({
             </div>
           );
         })}
+        {hasMoreComments && (
+          <div className="comments-list-toggle">
+            {!showAllComments && (
+              <button
+                type="button"
+                className="pill ghost"
+                onClick={() => setShowAllComments(true)}
+              >
+                {t('comments_view_all', { count: comments.length })}
+              </button>
+            )}
+            {showAllComments && (
+              <button
+                type="button"
+                className="pill ghost"
+                onClick={() => setShowAllComments(false)}
+              >
+                {t('comments_hide')}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   );

@@ -7,18 +7,37 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum AuthProvider {
+  local
+  google
+  hybrid
+}
+
+enum MemberRole {
+  view
+  edit
+}
+
+enum InviteStatus {
+  pending
+  accepted
+}
+
 model User {
-  id          Int              @id @default(autoincrement())
-  email       String           @unique
-  name        String
-  picture     String?
-  color       String?
-  createdAt   DateTime         @default(now())
-  lastLoginAt DateTime         @default(now())
-  documents   Document[]
-  memberships DocumentMember[]
-  sentInvites DocumentInvite[] @relation("InviteSender")
-  folders     Folder[]
+  id              Int              @id @default(autoincrement())
+  email           String           @unique
+  name            String
+  picture         String?
+  color           String?
+  authProvider    AuthProvider     @default(local)
+  passwordHash    String?
+  createdAt       DateTime         @default(now())
+  lastLoginAt     DateTime         @default(now())
+  documents       Document[]
+  memberships     DocumentMember[]
+  sentInvites     DocumentInvite[] @relation("InviteSender")
+  acceptedInvites DocumentInvite[] @relation("InviteAccepter")
+  folders         Folder[]
 
   @@map("users")
 }
@@ -36,6 +55,8 @@ model Document {
   versions  DocumentVersion[]
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
+
+  @@map("Document")
 }
 
 model Folder {
@@ -48,38 +69,42 @@ model Folder {
   updatedAt DateTime   @updatedAt
 
   @@unique([ownerId, name])
+  @@map("Folder")
 }
 
 model DocumentMember {
   id         Int      @id @default(autoincrement())
   userId     Int
   documentId Int
-  role       String
+  role       MemberRole
   createdAt  DateTime @default(now())
 
   user       User     @relation(fields: [userId], references: [id])
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@unique([userId, documentId])
+  @@map("DocumentMember")
 }
 
 model DocumentInvite {
-  id            Int       @id @default(autoincrement())
-  email         String
-  role          String
-  token         String    @unique
-  status        String    @default("pending")
-  documentId    Int
-  invitedById   Int
-  acceptedById  Int?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  acceptedAt    DateTime?
+  id           Int          @id @default(autoincrement())
+  email        String
+  role         MemberRole
+  token        String       @unique
+  status       InviteStatus @default(pending)
+  documentId   Int
+  invitedById  Int
+  acceptedById Int?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  acceptedAt   DateTime?
 
-  document      Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  invitedBy     User      @relation("InviteSender", fields: [invitedById], references: [id])
+  document     Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InviteSender", fields: [invitedById], references: [id])
+  acceptedBy   User?        @relation("InviteAccepter", fields: [acceptedById], references: [id], onDelete: SetNull)
 
   @@unique([documentId, email])
+  @@map("DocumentInvite")
 }
 
 model DocumentVersion {
@@ -91,4 +116,6 @@ model DocumentVersion {
   createdAt  DateTime @default(now())
 
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("DocumentVersion")
 }

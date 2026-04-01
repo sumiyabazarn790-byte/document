@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 
-import { signInWithEmail, signInWithGoogle } from '../services/auth';
+import { registerWithPassword, signInWithGoogle, signInWithPassword } from '../services/auth';
 
 const COLORS = [
   '#1a73e8',
@@ -32,8 +32,13 @@ export function useAuthProfile() {
   );
 
   const [profile, setProfile] = useState(() => {
-    const raw = localStorage.getItem(userKey);
-    return raw ? JSON.parse(raw) : null;
+    try {
+      const raw = localStorage.getItem(userKey);
+      return raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      localStorage.removeItem(userKey);
+      return null;
+    }
   });
 
   const user = profile || guestUser;
@@ -43,8 +48,14 @@ export function useAuthProfile() {
     localStorage.setItem(userKey, JSON.stringify(next));
   };
 
-  const loginWithEmail = async ({ name, email }) => {
-    const next = await signInWithEmail({ name, email });
+  const loginWithPassword = async ({ identifier, password }) => {
+    const next = await signInWithPassword({ identifier, password });
+    persistProfile(next);
+    return next;
+  };
+
+  const registerWithPasswordAccount = async ({ name, email, password }) => {
+    const next = await registerWithPassword({ name, email, password });
     persistProfile(next);
     return next;
   };
@@ -63,7 +74,8 @@ export function useAuthProfile() {
   return {
     profile,
     user,
-    loginWithEmail,
+    loginWithPassword,
+    registerWithPassword: registerWithPasswordAccount,
     loginWithGoogle,
     logout,
   };

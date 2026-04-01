@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
 import ColorPicker from './ColorPicker';
+import centerIcon from '../assets/1.jpg';
+import rightIcon from '../assets/2.jpg';
+import justifyIcon from '../assets/3.jpg';
 import { useI18n } from '../i18n/i18n';
 
 function DocsToolbar({
@@ -179,9 +182,10 @@ function DocsToolbar({
             className="pill select font-family-select"
             value={fontFamily}
             onChange={(event) => onFontFamilyChange(event.target.value)}
+            title={fontFamily}
           >
             {fonts.map((font) => (
-              <option key={font} value={font}>
+              <option key={font} value={font} style={{ fontFamily: `'${font}', 'Plus Jakarta Sans', sans-serif` }}>
                 {font}
               </option>
             ))}
@@ -283,19 +287,19 @@ function DocsToolbar({
             className={`icon ${editor?.isActive({ textAlign: 'center' }) ? 'active' : ''}`}
             onClick={() => editor?.chain().focus().setTextAlign('center').run()}
           >
-            {'\u25A4'}
+            <img src={centerIcon} alt="" className="toolbar-image-icon" />
           </button>
           <button
             className={`icon ${editor?.isActive({ textAlign: 'right' }) ? 'active' : ''}`}
             onClick={() => editor?.chain().focus().setTextAlign('right').run()}
           >
-            {'\u25A3'}
+            <img src={rightIcon} alt="" className="toolbar-image-icon" />
           </button>
           <button
             className={`icon ${editor?.isActive({ textAlign: 'justify' }) ? 'active' : ''}`}
             onClick={() => editor?.chain().focus().setTextAlign('justify').run()}
           >
-            {'\u2630'}
+            <img src={justifyIcon} alt="" className="toolbar-image-icon" />
           </button>
         </div>
         <div className="divider" />

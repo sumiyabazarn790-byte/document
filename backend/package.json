@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "node index.js",
     "start": "node index.js",
+    "start:prod": "prisma migrate deploy && npm start",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
-    "prisma:push": "prisma db push"
+    "prisma:push": "prisma db push",
+    "prisma:migrate": "prisma migrate deploy"
   },
   "dependencies": {
     "@prisma/client": "^6.6.0",

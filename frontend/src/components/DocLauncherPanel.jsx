@@ -81,9 +81,11 @@ function DocLauncherPanel({
               autoFocus
             />
           </label>
-          <button type="button" className="launcher-close" onClick={onClose}>
-            {t('close')}
-          </button>
+          <div className="launcher-actions">
+            <button type="button" className="launcher-close" onClick={onClose}>
+              {t('close')}
+            </button>
+          </div>
         </div>
 
         <div className="launcher-section launcher-section-hero">

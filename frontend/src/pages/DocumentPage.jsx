@@ -194,9 +194,17 @@ const REACTION_EMOJIS = [
   '😂', '✅', '🚀', '✨',
 ];
 
+const createFreshWorkspace = (t) => {
+  const freshTab = createLocalTab(t('tab_label', { index: 1 }));
+  return {
+    freshTab,
+    freshTabs: [freshTab],
+  };
+};
+
 function DocumentPage() {
   const { t } = useI18n();
-  const { profile, user, loginWithEmail, loginWithGoogle, logout } = useAuthProfile();
+  const { profile, user, loginWithPassword, registerWithPassword, loginWithGoogle, logout } = useAuthProfile();
   const quickTemplates = useMemo(() => buildQuickTemplates(t), [t]);
 
   const [status, setStatus] = useState('connecting');
@@ -217,7 +225,9 @@ function DocumentPage() {
   const [pendingInvites, setPendingInvites] = useState([]);
   const [activeInvite, setActiveInvite] = useState(null);
   const [dismissedInviteToken, setDismissedInviteToken] = useState('');
-  const [showLauncher, setShowLauncher] = useState(false);
+  const hasStoredProfile = Boolean(localStorage.getItem('doc:user'));
+  const unauthenticatedWorkspace = hasStoredProfile ? null : createFreshWorkspace(t);
+  const [showLauncher, setShowLauncher] = useState(() => !hasStoredProfile);
   const [showVersions, setShowVersions] = useState(false);
   const [showOpenTab, setShowOpenTab] = useState(false);
   const [showRename, setShowRename] = useState(false);
@@ -254,6 +264,10 @@ function DocumentPage() {
   const isTopbarVisible = showTopbar && !showLogin && !showShare && !showLauncher;
 
   const [tabs, setTabs] = useState(() => {
+    if (!hasStoredProfile) {
+      return unauthenticatedWorkspace.freshTabs;
+    }
+
     const raw = localStorage.getItem(tabsKey);
     if (raw) {
       try {
@@ -272,6 +286,10 @@ function DocumentPage() {
   });
 
   const [activeTabId, setActiveTabId] = useState(() => {
+    if (!hasStoredProfile) {
+      return unauthenticatedWorkspace.freshTab.id;
+    }
+
     const stored = localStorage.getItem(activeTabKey);
     if (stored) return stored;
     const raw = localStorage.getItem(tabsKey);
@@ -401,6 +419,67 @@ function DocumentPage() {
       ? `${ROOM_NAME}-${activeTabId}`
       : ROOM_NAME;
 
+  const resetUnauthenticatedWorkspace = () => {
+    const { freshTab, freshTabs } = createFreshWorkspace(t);
+
+    Object.keys(localStorage).forEach((key) => {
+      if (
+        key === tabsKey ||
+        key === activeTabKey ||
+        key.startsWith(`doc:draft:${ROOM_NAME}:`) ||
+        key.startsWith(`doc:history:${ROOM_NAME}:`) ||
+        key.startsWith('doc:notifications-seen:')
+      ) {
+        localStorage.removeItem(key);
+      }
+    });
+
+    localStorage.setItem(tabsKey, JSON.stringify(freshTabs));
+    localStorage.setItem(activeTabKey, freshTab.id);
+    localStorage.setItem(getDraftKey(freshTab.id), '');
+    localStorage.setItem(getHistoryKey(freshTab.id), JSON.stringify([]));
+
+    setTabs(freshTabs);
+    setActiveTabId(freshTab.id);
+    setDocTitle(freshTab.title);
+    setUsers([]);
+    setComments([]);
+    setSharedDocuments([]);
+    setFolders([]);
+    setCollapsedFolderIds([]);
+    setAcceptedMembers([]);
+    setPendingInvites([]);
+    setActiveInvite(null);
+    setLastSeenNotificationAt('');
+    setShowNotificationsOnly(false);
+    setCommentTab('all');
+    setCommentQuery('');
+    setCommentTypeFilter('all');
+    setCommentTabFilter('all');
+    setShowCommentComposer(false);
+    setCommentDraft('');
+    setShowShare(false);
+    setShowVersions(false);
+    setShowOpenTab(false);
+    setShowRename(false);
+    setShowFind(false);
+    setShowPaste(false);
+    setShowImage(false);
+    setShowLink(false);
+    setShowMoveTab(false);
+    setShowDeleteTab(false);
+    setFolderDialog(null);
+  };
+
+  const requireLoginForEntry = () => {
+    if (profile) {
+      return false;
+    }
+
+    setShowLogin(true);
+    return true;
+  };
+
   const ydoc = useMemo(() => new Y.Doc(), [activeTabId, activeDocumentId]);
   const provider = useMemo(
     () => new WebsocketProvider(WS_URL, roomName, ydoc),
@@ -451,6 +530,13 @@ function DocumentPage() {
       setDocTitle(activeTab.title);
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!profile) {
+      resetUnauthenticatedWorkspace();
+      setShowLauncher(true);
+    }
+  }, [profile, t]);
 
   useEffect(() => {
     if (!profile?.email) {
@@ -669,14 +755,30 @@ function DocumentPage() {
           user,
         }),
       ],
-      editable: !isReadOnly,
+      editable: Boolean(profile) && !isReadOnly,
       editorProps: {
         attributes: {
           class: 'editor-content',
         },
+        handleDOMEvents: {
+          focus: () => {
+            if (!profile) {
+              setShowLogin(true);
+            }
+
+            return false;
+          },
+          mousedown: () => {
+            if (!profile) {
+              setShowLogin(true);
+            }
+
+            return false;
+          },
+        },
       },
     },
-    [activeTabId, activeDocumentId, activeAccessRole, user]
+    [activeTabId, activeDocumentId, activeAccessRole, profile, user]
   );
 
   useEffect(() => {
@@ -1116,20 +1218,28 @@ function DocumentPage() {
   const handleLogin = (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const mode = String(form.get('mode') || 'login');
     const name = String(form.get('name') || '').trim();
-    const email = String(form.get('email') || '').trim();
-    if (!name || !email) return;
+    const identifier = String(form.get('identifier') || form.get('email') || '').trim();
+    const email = String(form.get('email') || identifier).trim();
+    const password = String(form.get('password') || '');
 
-    loginWithEmail({ name, email })
+    const action =
+      mode === 'register'
+        ? registerWithPassword({ name, email, password })
+        : loginWithPassword({ identifier, password });
+
+    action
       .then(() => {
         setShowLogin(false);
+        setShowLauncher(true);
       })
       .catch((error) => {
         console.error('Manual login failed', error);
         notify({
           type: 'error',
-          title: t('toast_login_failed'),
-          message: t('toast_login_failed_message'),
+          title: mode === 'register' ? t('login_register_error_title') : t('login_error_title'),
+          message: error.message || t('toast_login_failed_message'),
         });
       });
   };
@@ -1138,6 +1248,7 @@ function DocumentPage() {
     loginWithGoogle(credential)
       .then(() => {
         setShowLogin(false);
+        setShowLauncher(true);
       })
       .catch((error) => {
         console.error('Google login failed', error);
@@ -2179,30 +2290,32 @@ function DocumentPage() {
     return true;
   });
 
-  const recentDocuments = [
-    ...tabs.map((tab) => ({
-      id: `tab-${tab.id}`,
-      title: tab.title,
-      subtitle: tab.documentId
-        ? t('recent_shared_draft', { role: getAccessLabel(tab.accessRole) })
-        : t('recent_local_draft'),
-      preview: stripHtml(tab.content || '').slice(0, 180) || tab.title,
-      type: 'tab',
-      tabId: tab.id,
-    })),
-    ...sharedDocuments.map((document) => ({
-      id: `shared-${document.id}`,
-      title: document.title,
-      subtitle: t('recent_shared_owner', {
-        owner: document.ownerEmail,
-        role: getAccessLabel(document.accessRole),
-      }),
-      preview: `${document.title}\n${document.ownerEmail}`,
-      type: 'shared',
-      documentId: document.id,
-      folderId: document.folderId ?? null,
-    })),
-  ].slice(0, 8);
+  const recentDocuments = profile
+    ? [
+        ...tabs.map((tab) => ({
+          id: `tab-${tab.id}`,
+          title: tab.title,
+          subtitle: tab.documentId
+            ? t('recent_shared_draft', { role: getAccessLabel(tab.accessRole) })
+            : t('recent_local_draft'),
+          preview: stripHtml(tab.content || '').slice(0, 180) || tab.title,
+          type: 'tab',
+          tabId: tab.id,
+        })),
+        ...sharedDocuments.map((document) => ({
+          id: `shared-${document.id}`,
+          title: document.title,
+          subtitle: t('recent_shared_owner', {
+            owner: document.ownerEmail,
+            role: getAccessLabel(document.accessRole),
+          }),
+          preview: `${document.title}\n${document.ownerEmail}`,
+          type: 'shared',
+          documentId: document.id,
+          folderId: document.folderId ?? null,
+        })),
+      ].slice(0, 8)
+    : [];
 
   const launcherFolders = useMemo(
     () =>
@@ -2224,6 +2337,10 @@ function DocumentPage() {
   );
 
   const handleOpenLauncherRecent = (item) => {
+    if (requireLoginForEntry()) {
+      return;
+    }
+
     setShowLauncher(false);
     if (item.type === 'shared' && item.documentId) {
       handleOpenSharedDocument(item.documentId);
@@ -2235,6 +2352,10 @@ function DocumentPage() {
   };
 
   const handleOpenLauncherFolderDocument = (item) => {
+    if (requireLoginForEntry()) {
+      return;
+    }
+
     setShowLauncher(false);
     if (item.documentId) {
       handleOpenSharedDocument(item.documentId);
@@ -2261,7 +2382,10 @@ function DocumentPage() {
         members={acceptedMembers}
         hasSharedDocument={Boolean(activeDocumentId)}
         profile={profile}
-        onLogout={logout}
+        onLogout={() => {
+          logout();
+          setShowLauncher(true);
+        }}
         onLogin={() => setShowLogin(true)}
         onShare={handleShare}
         onRename={handleRename}
@@ -2486,6 +2610,9 @@ function DocumentPage() {
           recentDocuments={recentDocuments}
           onClose={() => setShowLauncher(false)}
           onCreateBlank={() => {
+            if (requireLoginForEntry()) {
+              return;
+            }
             handleNewDoc();
             setShowLauncher(false);
           }}

@@ -3,6 +3,7 @@ require('dotenv').config();
 const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
+const util = require('util');
 const express = require('express');
 const WebSocket = require('ws');
 const { OAuth2Client } = require('google-auth-library');
@@ -11,15 +12,61 @@ const { prisma } = require('./lib/prisma');
 const { sendInviteEmail, smtpConfigured } = require('./lib/mailer');
 
 const app = express();
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 4000);
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const inviteUrl = (token) => `${FRONTEND_ORIGIN}?invite=${encodeURIComponent(token)}`;
 const MAX_VERSIONS_PER_DOCUMENT = 25;
+const PDF_EXPORT_ENABLED = process.env.PDF_EXPORT_ENABLED !== 'false';
+const PRIVATE_IP_PATTERN =
+  /^(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/i;
 
 const googleClient = GOOGLE_CLIENT_ID
   ? new OAuth2Client(GOOGLE_CLIENT_ID)
   : null;
+const scryptAsync = util.promisify(crypto.scrypt);
+
+const mergeAuthProvider = (currentProvider, nextProvider) => {
+  const current = String(currentProvider || '').trim().toLowerCase();
+  const next = String(nextProvider || '').trim().toLowerCase();
+
+  if (!current) {
+    return next || 'local';
+  }
+
+  if (!next || current === next) {
+    return current;
+  }
+
+  return 'hybrid';
+};
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) {
+    return true;
+  }
+
+  if (IS_PRODUCTION) {
+    return origin === FRONTEND_ORIGIN;
+  }
+
+  if (origin === FRONTEND_ORIGIN) {
+    return true;
+  }
+
+  try {
+    const parsed = new URL(origin);
+    return PRIVATE_IP_PATTERN.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+};
+
+if (IS_PRODUCTION && !FRONTEND_ORIGIN) {
+  throw new Error('FRONTEND_ORIGIN must be set in production.');
+}
 
 const pickColor = (seed = '') => {
   const colors = ['#1a73e8', '#e8710a', '#188038', '#9334e6', '#d93025', '#0f9d58'];
@@ -40,19 +87,62 @@ const normalizeRole = (role) => {
   return value === 'view' ? 'view' : 'edit';
 };
 
-const upsertUser = async ({ email, name, picture }) => {
+const hashPassword = async (password) => {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derivedKey = await scryptAsync(password, salt, 64);
+  return `scrypt:${salt}:${Buffer.from(derivedKey).toString('hex')}`;
+};
+
+const verifyPassword = async (password, storedHash) => {
+  if (!storedHash || !storedHash.startsWith('scrypt:')) {
+    return false;
+  }
+
+  const [, salt, key] = storedHash.split(':');
+  if (!salt || !key) {
+    return false;
+  }
+
+  const derivedKey = await scryptAsync(password, salt, 64);
+  const storedKeyBuffer = Buffer.from(key, 'hex');
+  const derivedKeyBuffer = Buffer.from(derivedKey);
+
+  if (storedKeyBuffer.length !== derivedKeyBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(storedKeyBuffer, derivedKeyBuffer);
+};
+
+const upsertUser = async ({ email, name, picture, authProvider, passwordHash }) => {
   const existing = await prisma.user.findUnique({
     where: { email },
   });
 
   if (existing) {
+    const nextData = {
+      lastLoginAt: new Date(),
+    };
+
+    if (name) {
+      nextData.name = name;
+    }
+
+    if (picture !== undefined) {
+      nextData.picture = picture || null;
+    }
+
+    if (authProvider) {
+      nextData.authProvider = mergeAuthProvider(existing.authProvider, authProvider);
+    }
+
+    if (passwordHash !== undefined) {
+      nextData.passwordHash = passwordHash;
+    }
+
     return prisma.user.update({
       where: { email },
-      data: {
-        name,
-        picture: picture || null,
-        lastLoginAt: new Date(),
-      },
+      data: nextData,
     });
   }
 
@@ -62,6 +152,8 @@ const upsertUser = async ({ email, name, picture }) => {
       name,
       picture: picture || null,
       color: pickColor(email || name),
+      authProvider: authProvider || 'local',
+      passwordHash: passwordHash || null,
       lastLoginAt: new Date(),
     },
   });
@@ -177,6 +269,10 @@ const createVersionSnapshot = async ({ documentId, title, content, createdBy }) 
 };
 
 const getPdfBrowser = async () => {
+  if (!PDF_EXPORT_ENABLED) {
+    throw new Error('PDF export is disabled by configuration.');
+  }
+
   // Lazy load so the backend still starts before the dependency is installed.
   // eslint-disable-next-line global-require, import/no-dynamic-require
   const puppeteer = require('puppeteer');
@@ -186,9 +282,13 @@ const getPdfBrowser = async () => {
     '/usr/bin/chromium',
   ].find((candidate) => candidate && fs.existsSync(candidate));
 
+  if (!executablePath) {
+    throw new Error('Chromium executable not found. Set PUPPETEER_EXECUTABLE_PATH or disable PDF export.');
+  }
+
   return puppeteer.launch({
     headless: true,
-    ...(executablePath ? { executablePath } : {}),
+    executablePath,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 };
@@ -292,7 +392,12 @@ const resolveDocumentAccess = async (documentId, userEmail) => {
 
 app.use(express.json());
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', FRONTEND_ORIGIN);
+  const requestOrigin = req.headers.origin;
+
+  if (isAllowedOrigin(requestOrigin)) {
+    res.header('Access-Control-Allow-Origin', requestOrigin || FRONTEND_ORIGIN);
+  }
+  res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   if (req.method === 'OPTIONS') {
@@ -305,12 +410,10 @@ app.use((req, res, next) => {
 app.get('/health', async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, service: 'backend', db: 'connected', time: new Date().toISOString() });
+    res.json({ status: 'ok' });
   } catch (error) {
     res.status(500).json({
-      ok: false,
-      service: 'backend',
-      db: 'disconnected',
+      status: 'error',
       error: error.message,
     });
   }
@@ -340,10 +443,16 @@ app.post('/auth/google', async (req, res) => {
       return;
     }
 
+    const existing = await prisma.user.findUnique({
+      where: { email: payload.email.toLowerCase() },
+    });
+
     const user = await upsertUser({
-      email: payload.email,
+      email: payload.email.toLowerCase(),
       name: payload.name || payload.given_name || payload.email.split('@')[0],
       picture: payload.picture,
+      authProvider: 'google',
+      passwordHash: existing?.passwordHash,
     });
 
     res.json({ ok: true, user });
@@ -356,26 +465,108 @@ app.post('/auth/google', async (req, res) => {
   }
 });
 
-app.post('/auth/local', async (req, res) => {
+app.post('/auth/local/register', async (req, res) => {
   try {
     const name = String(req.body?.name || '').trim();
-    const email = String(req.body?.email || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
 
-    if (!name || !email) {
-      res.status(400).json({ ok: false, error: 'Name and email are required' });
+    if (!name || !email || password.length < 8) {
+      res.status(400).json({ ok: false, error: 'Name, email, and a password with at least 8 characters are required' });
       return;
     }
+
+    const existing = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existing) {
+      if (existing.authProvider === 'google' || existing.authProvider === 'hybrid') {
+        const passwordHash = await hashPassword(password);
+        const user = await upsertUser({
+          email,
+          name: name || existing.name,
+          picture: existing.picture,
+          authProvider: 'local',
+          passwordHash,
+        });
+
+        res.json({ ok: true, user });
+        return;
+      }
+
+      res.status(409).json({
+        ok: false,
+        error: 'This email is already registered. Please sign in with your password.',
+      });
+      return;
+    }
+
+    const passwordHash = await hashPassword(password);
 
     const user = await upsertUser({
       email,
       name,
       picture: null,
+      authProvider: 'local',
+      passwordHash,
     });
 
     res.json({ ok: true, user });
   } catch (error) {
-    console.error('Local auth failed', error);
+    console.error('Local register failed', error);
     res.status(500).json({ ok: false, error: 'Could not save user' });
+  }
+});
+
+app.post('/auth/local/login', async (req, res) => {
+  try {
+    const identifier = String(req.body?.identifier || '').trim();
+    const password = String(req.body?.password || '');
+
+    if (!identifier || !password) {
+      res.status(400).json({ ok: false, error: 'Email or name and password are required' });
+      return;
+    }
+
+    const normalizedIdentifier = identifier.toLowerCase();
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: normalizedIdentifier },
+          { name: identifier },
+        ],
+      },
+    });
+
+    if (!user) {
+      res.status(404).json({ ok: false, error: 'Account not found' });
+      return;
+    }
+
+    if (!user.passwordHash) {
+      res.status(409).json({
+        ok: false,
+        error: 'This account currently uses Google sign-in only. Use Create account to add a password, or continue with Google.',
+      });
+      return;
+    }
+
+    const isValid = await verifyPassword(password, user.passwordHash);
+    if (!isValid) {
+      res.status(401).json({ ok: false, error: 'Incorrect password' });
+      return;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { email: user.email },
+      data: { lastLoginAt: new Date() },
+    });
+
+    res.json({ ok: true, user: updatedUser });
+  } catch (error) {
+    console.error('Local login failed', error);
+    res.status(500).json({ ok: false, error: 'Could not sign in' });
   }
 });
 
@@ -1268,23 +1459,50 @@ app.get('/documents/:id/export/pdf', async (req, res) => {
     }
     res.status(500).json({
       ok: false,
-      error: 'Could not export PDF. Make sure the Puppeteer dependency is installed in the backend container.',
+      error: error.message || 'Could not export PDF.',
     });
   }
+});
+
+app.use((error, req, res, next) => {
+  if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
+    console.warn(`Rejected malformed JSON for ${req.method} ${req.originalUrl}`);
+    res.status(400).json({
+      ok: false,
+      error: 'Request body must be valid JSON',
+    });
+    return;
+  }
+
+  if (error) {
+    console.error('Unhandled request error', error);
+    res.status(error.status || 500).json({
+      ok: false,
+      error: error.message || 'Internal server error',
+    });
+    return;
+  }
+
+  next();
 });
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (conn, req) => {
+  if (!req.url?.startsWith('/ws')) {
+    conn.close();
+    return;
+  }
+
   setupWSConnection(conn, req, { gc: true });
 });
 
 prisma.$connect()
   .then(() => {
-    server.listen(PORT, () => {
-      console.log(`Backend listening on http://localhost:${PORT}`);
-      console.log(`Yjs WebSocket ready on ws://localhost:${PORT}`);
+    server.listen(PORT, HOST, () => {
+      console.log(`Backend listening on ${HOST}:${PORT}`);
+      console.log(`Yjs WebSocket ready on ${HOST}:${PORT}`);
       console.log('Prisma connected to PostgreSQL');
     });
   })

@@ -1,3 +1,7 @@
+import { WS_URL } from './env';
+
+export { WS_URL };
+
 export const COLORS = [
   '#1a73e8',
   '#e8710a',
@@ -43,7 +47,6 @@ export const FONTS = [
 export const FONT_SIZES = [10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 60, 72, 96];
 export const ZOOM_LEVELS = [50, 75, 90, 100, 110, 125, 150, 200];
 
-export const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:4000';
 export const ROOM_NAME = import.meta.env.VITE_DOC_ROOM || 'demo-document';
 
 export const tabsKey = `doc:tabs:${ROOM_NAME}`;
